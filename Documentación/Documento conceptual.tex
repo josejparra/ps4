@@ -1,0 +1,216 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{tikz-cd}
+\usepackage{multicol}
+\usepackage{natbib}
+\usepackage[spanish]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amsfonts} 
+\usepackage{amssymb}   
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{1\baselineskip}
+
+\title{\Large\textbf{Modelo pensional de Asofondos} \\[0.2cm]}
+\author{\normalsize Colaboración Asofondos -- CARF -- Fedesarrollo}
+\date{\normalsize \today}
+\begin{document}
+\maketitle
+
+Este documento expone la arquitectura matemática y el diseño conceptual del modelo de microsimulación del sistema pensional colombiano, basado en \citet{becerra2025simulation}. El modelo está diseñado para superar las limitaciones de los análisis estáticos, al proyectar de manera intertemporal la evolución de los individuos, sus trayectorias laborales y contributivas, y las reglas institucionales que determinan el acceso y el monto de los beneficios pensionales.
+
+A partir de esta estructura, el modelo permite evaluar la sostenibilidad financiera del sistema, estimando el déficit anual y el Valor Presente Neto (VPN) del pasivo pensional para el periodo 2025-2100, así como la evolución de los saldos del Fondo de Garantía de Pensión Mínima (FGPM) y del Fondo de Ahorro del Pilar Contributivo. Además, incorpora dimensiones de cobertura, suficiencia y equidad, al calcular tasas de reemplazo, pensiones promedio por pilar, brechas de género en densidades de cotización, subsidios implícitos por decil de ingreso y medidas distributivas como el coeficiente de Gini de pensiones.
+
+El modelo también permite simular la coexistencia entre el marco de la Ley 100 de 1993 y el esquema de pilares introducido por la Ley 2381 de 2024, así como evaluar escenarios alternativos ante cambios demográficos, laborales, macroeconómicos o institucionales. Su implementación modular en Python lo convierte en un laboratorio prospectivo para analizar reformas paramétricas, choques macroeconómicos y la eventual incorporación de regímenes especiales como el FOMAG y CASUR.
+
+Para materializar estas métricas agregadas a partir de microdatos, el marco conceptual se fundamenta en la evolución intertemporal de arreglos multidimensionales, o tensores, cuya estructura matemática se detalla a continuación.
+
+\section{Estructura}
+
+\subsection{Demografía y educación}
+El punto de partida del modelo es un tensor poblacional:
+\begin{align*}
+\mathsf{N}
+=
+[n_{c,g,e,t}]
+\in
+\mathbb{R}_{\geq 0}^{|\mathcal{C}| \times |\mathcal{G}| \times |\mathcal{E}| \times |\mathcal{T}|}.
+\end{align*}
+
+Los índices del tensor se definen a partir de los siguientes conjuntos:
+\begin{align*}
+\mathcal{C} &= \{c_0,c_1,\ldots,c_\infty\}, \\
+\mathcal{G} &= \{h,m\}, \\
+\mathcal{E} &= \{e_L,e_M,e_H\}, \\
+\mathcal{T} &= \{t_0,t_1,\ldots,t_\infty\}.
+\end{align*}
+
+Los componentes de estos conjuntos se interpretan como:
+\begin{align*}
+h &= \text{hombre}, 
+& m &= \text{mujer}, \\[0.2cm]
+e_L &= \text{logro educativo bajo}, 
+& e_M &= \text{logro educativo medio}, 
+& e_H &= \text{logro educativo alto}.
+\end{align*}
+
+Por tanto, cada elemento \(n_{c,g,e,t}\) representa el número de personas vivas pertenecientes a la cohorte \(c\), de sexo \(g\), con logro educativo \(e\), en el año \(t\). Asimismo, para un sexo fijo \(\hat{g}\in\mathcal{G}\) y un año fijo \(\hat{t}\in\mathcal{T}\), la rebanada del tensor correspondiente a \((\hat{g},\hat{t})\) está dada por:
+\[
+\mathbf{N}_{\hat{g},\hat{t}}
+=
+[n_{c,\hat{g},e,\hat{t}}]
+\in
+\mathbb{R}_{\geq 0}^{|\mathcal{C}| \times |\mathcal{E}|}.
+\]
+
+Esta rebanada es equivalente a una matriz de cohortes por logro educativo:
+\begin{align*}
+\mathbf{N}_{\hat{g},\hat{t}}
+=
+\begin{pmatrix}
+n_{c_0,\hat{g},e_L,\hat{t}} 
+& n_{c_0,\hat{g},e_M,\hat{t}} 
+& n_{c_0,\hat{g},e_H,\hat{t}} \\[0.2cm]
+n_{c_1,\hat{g},e_L,\hat{t}} 
+& n_{c_1,\hat{g},e_M,\hat{t}} 
+& n_{c_1,\hat{g},e_H,\hat{t}} \\
+\vdots & \vdots & \vdots \\
+n_{c_\infty,\hat{g},e_L,\hat{t}} 
+& n_{c_\infty,\hat{g},e_M,\hat{t}} 
+& n_{c_\infty,\hat{g},e_H,\hat{t}}
+\end{pmatrix}.
+\end{align*}
+
+
+
+
+\subsection{Mercado laboral}
+
+Para incorporar la dinámica económica que antecede a los resultados pensionales de los individuos, así como capturar las particularidades de los regímenes especiales y modelar los riesgos de invalidez, la población contenida en cada celda del tensor \(\mathsf{N}\) se descompone según su condición en el mercado laboral. Se define el conjunto ampliado de estados laborales posibles como:
+\begin{align*}
+\mathcal{L} &= \{a, i, d, n, x, p, v\},
+\end{align*}
+donde los componentes se interpretan de la siguiente manera:
+\begin{align*}
+a &= \text{asalariado (cotizante dependiente)}, \\
+i &= \text{independiente (cuenta propia, cotizante o informal)}, \\
+d &= \text{desempleado}, \\
+n &= \text{inactivo (fuera de la fuerza laboral, sin pensión de invalidez)}, \\
+x &= \text{inactivo discapacitado (elegible para o recibiendo pensión de invalidez)}, \\
+p &= \text{maestro (régimen especial del Magisterio)}, \\
+v &= \text{militar (régimen especial de la Fuerza Pública)}.
+\end{align*}
+
+Para cada celda poblacional \((c,g,e,t)\), se define el vector fila de distribución laboral:
+\begin{align*}
+\boldsymbol{\pi}_{c,g,e,t}
+=
+\begin{pmatrix}
+\pi_{c,g,e,a,t} &
+\pi_{c,g,e,i,t} &
+\pi_{c,g,e,d,t} &
+\pi_{c,g,e,n,t} &
+\pi_{c,g,e,x,t} &
+\pi_{c,g,e,p,t} &
+\pi_{c,g,e,v,t}
+\end{pmatrix}
+\in [0,1]^{1\times 7},
+\end{align*}
+donde
+\begin{align*}
+\sum_{l\in\mathcal{L}} \pi_{c,g,e,l,t}=1
+\qquad
+\forall (c,g,e,t).
+\end{align*}
+
+La población en cada estado laboral se obtiene al multiplicar la población total de la celda por su distribución laboral:
+\begin{align*}
+m_{c,g,e,l,t}
+=
+n_{c,g,e,t}\,\pi_{c,g,e,l,t}
+\qquad
+\forall l\in\mathcal{L}.
+\end{align*}
+En forma vectorial:
+\begin{align*}
+\mathbf{m}_{c,g,e,t}
+=
+n_{c,g,e,t}\boldsymbol{\pi}_{c,g,e,t}
+\in
+\mathbb{R}_{\geq 0}^{1\times 7}.
+\end{align*}
+
+De este modo, el tensor general de la población se expande a un tensor de orden cinco:
+\begin{align*}
+\mathsf{M}
+=
+[m_{c,g,e,l,t}]
+\in
+\mathbb{R}_{\geq 0}^{|\mathcal{C}| \times |\mathcal{G}| \times |\mathcal{E}| \times |\mathcal{L}| \times |\mathcal{T}|}.
+\end{align*}
+
+Por construcción, este tensor conserva la consistencia agregada con respecto al tensor poblacional original \(\mathsf{N}\):
+\begin{align*}
+n_{c,g,e,t}
+=
+\sum_{l \in \mathcal{L}} m_{c,g,e,l,t}
+\qquad
+\forall (c,g,e,t)
+\in
+\mathcal{C}\times\mathcal{G}\times\mathcal{E}\times\mathcal{T}.
+\end{align*}
+
+La transición intertemporal de la distribución laboral entre el año \(t\) y el año \(t+1\) se modela como un proceso de Markov finito, gobernado por una matriz de transición estocástica por filas. Para cada cohorte \(c\), sexo \(g\), logro educativo \(e\) y año \(t\), se define:
+\begin{align*}
+\mathbf{P}_{c,g,e,t}
+=
+\left[p_{jk}(c,g,e,t)\right]_{j,k\in\mathcal{L}}
+\in
+[0,1]^{7\times 7}.
+\end{align*}
+
+Dado el ordenamiento \(\mathcal{L}=\{a,i,d,n,x,p,v\}\), esta matriz puede escribirse como:
+\begin{align*}
+\mathbf{P}_{c,g,e,t}
+=
+\begin{pmatrix}
+p_{aa} & p_{ai} & p_{ad} & p_{an} & p_{ax} & p_{ap} & p_{av} \\
+p_{ia} & p_{ii} & p_{id} & p_{in} & p_{ix} & p_{ip} & p_{iv} \\
+p_{da} & p_{di} & p_{dd} & p_{dn} & p_{dx} & p_{dp} & p_{dv} \\
+p_{na} & p_{ni} & p_{nd} & p_{nn} & p_{nx} & p_{np} & p_{nv} \\
+p_{xa} & p_{xi} & p_{xd} & p_{xn} & p_{xx} & p_{xp} & p_{xv} \\
+p_{pa} & p_{pi} & p_{pd} & p_{pn} & p_{px} & p_{pp} & p_{pv} \\
+p_{va} & p_{vi} & p_{vd} & p_{vn} & p_{vx} & p_{vp} & p_{vv}
+\end{pmatrix}_{c,g,e,t}.
+\end{align*}
+
+Cada elemento \(p_{jk}(c,g,e,t)\) denota la probabilidad de que un individuo de la cohorte \(c\), sexo \(g\) y logro educativo \(e\) transite del estado laboral \(j\in\mathcal{L}\) al estado laboral \(k\in\mathcal{L}\) entre los años \(t\) y \(t+1\). Por definición, las filas satisfacen:
+\begin{align*}
+\sum_{k \in \mathcal{L}} p_{jk}(c,g,e,t)=1
+\qquad
+\forall j\in\mathcal{L}.
+\end{align*}
+
+La evolución de la distribución laboral dentro de cada celda poblacional está dada por:
+\begin{align*}
+\boldsymbol{\pi}_{c,g,e,t+1}
+=
+\boldsymbol{\pi}_{c,g,e,t}
+\mathbf{P}_{c,g,e,t}.
+\end{align*}
+
+Finalmente, una vez determinada la distribución laboral del año \(t+1\), los conteos por estado laboral se obtienen usando la población proyectada de la celda:
+\begin{align*}
+\mathbf{m}_{c,g,e,t+1}
+=
+n_{c,g,e,t+1}
+\boldsymbol{\pi}_{c,g,e,t+1}.
+\end{align*}
+
+\subsection{Sistema pensional}
+
+\bibliographystyle{apalike}
+\bibliography{Referencias}
+
+\end{document}
